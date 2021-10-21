@@ -1,0 +1,271 @@
+---
+title: "Pregunta 3"
+author: "Javier Saavedra"
+date: "20-10-2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(stringr)
+library(MASS)
+library(ggplot2)
+```
+
+# 1. Preparación de la data
+
+Cargamos la información y separamos la data entre características del encuestado y los puntajes de cada pregunta del cuestionario
+
+```{r}
+Datos_prueba_Fix <- read.csv2(file = "Datos prueba Fix.csv", 
+                              sep = ";")
+
+dataD <- Datos_prueba_Fix[, c(paste0("D", 1:8))]
+dataP <- Datos_prueba_Fix[, c(paste0("P", 1:28))]
+```
+
+Podemos apreciar que existe una cantidad importante de valores atipicos para las respuestas de cada pregunta del diccionario que no están dentro del rango contemplado (de 1 a 5). Corregiremos algunos de estos valores en base a ciertas reglas de interpretación.
+
+```{r}
+valores_unicosP <- unique(unlist(unname(apply(dataP, 2, unique))))
+valores_unicosP <- unique(gsub(" ", "", valores_unicosP))
+valores_unicosP
+```
+
+Creamos una función para reemplazar valores atípicos en base a un mapeo entre los caracteres extraños y el valor interpretado por nuestra parte. Posteriormente se imputaran los valores faltantes por el valor 3, ya que dentro de las encuestas en la escala de Likert este valor representa una respuesta neutra por parte del participante. Finalmente, filtraremos un total de 23 filas que presentan valores nulos para las caracteristicas de los encuestados (18 observaciones) o que presenten valores fuera de un rango definido (5 observaciones en el campo de edad), quedando así con un conjunto final de 1975 observaciones (23 menos con respecto al original).
+
+```{r}
+reemplaza_valores <- function(x) {
+  
+  x.char <- as.character(x)
+  x.char <- stringr::str_replace(x.char, " ", "")
+  x.replace <- str_replace_all(x.char, vector_reemplazo)
+  x.numeric <- as.numeric(x.replace)
+  
+  return(x.numeric)
+}
+
+vector_reemplazo <- c("4000000$" = "4",
+                      "400000$" = "4",
+                      "40000$" = "4",
+                      "4000$" = "4",
+                      "400$" = "4",
+                      "50000$" = "5",
+                      "5000$" = "5",
+                      "500$" = "5",
+                      "2000$" = "2",
+                      "10000$" = "1",
+                      "5$" = "5",
+                      "4$" = "4",
+                      "3$" = "3",
+                      "2$" = "2",
+                      "1$" = "1",
+                      "a$" = "2",
+                      "b$" = "2",
+                      "-1$" = "1",
+                      "-3$" = "3",
+                      "-2$" = "2",
+                      "-4$" = "4",
+                      "7$" = "",
+                      "8$" = "",
+                      "12$" = "",
+                      "10$" = "",
+                      "9$" = "")
+```
+
+Finalmente, generamos un conjunto de datos compuesto por las dos variables dependientes de interés (satisfacción y recomendación), variables descriptivas de cada sujeto y una última variable que correspondera a la suma del resultado de cada pregunta del encuestado escalado entre 0 y 100 (sin contar la P18 y P19). El enfoque de sumar los puntajes de todas las preguntas es algo común en los campos de psicometría y permite generar variables continuas, lo cuál tiene sus ventajas al momento de usar los modelos típicos. Una mejora que se podría realizar en este caso es agrupar las preguntas en base a ciertos tópicos, por ejemplo preguntas relacionadas a la calidad de los productos ofrecidos por la tienda, preguntas relacionadas a la calidad del servicio o preguntas relacionadas a la calidad de la postventa. Por el momento solo generaremos una única variable que represente una evaluación de la experiencia del cliente.
+
+```{r}
+dataP.clean <- as.data.frame(sapply(dataP, reemplaza_valores))
+dataP.clean.nonan <- dataP.clean %>% replace(is.na(.), 3)
+
+data.clean <- cbind(dataD, dataP.clean.nonan)
+data.clean.na <- na.omit(data.clean)
+
+Y1 <- data.clean.na$P18
+Y2 <- data.clean.na$P19
+
+D <- data.clean.na[, 1:8]
+D <- as.data.frame(sapply(D, as.factor))
+
+Q <- data.clean.na[, 9:36]
+Q <- Q[, -c(18,19)]
+dataQ <- apply(Q, 1, sum)/(ncol(Q)*5)
+
+data.final <- cbind(Y1, Y2, D, dataQ)
+data.final <- data.final %>% 
+  dplyr::filter(D1 != 3) %>% 
+  dplyr::mutate(
+    dataQ = dataQ*100
+  )
+data.final$Y1 <- factor(data.final$Y1, levels = c("1", "2", "3", "4", "5"))
+data.final$Y2 <- factor(data.final$Y2, levels = c("1", "2", "3", "4", "5"))
+colnames(data.final) <- c("satisf", 
+                          "recomen", 
+                          "genero", 
+                          "edad", 
+                          "nacion", 
+                          "resid", 
+                          "sosten", 
+                          "ingreso", 
+                          "frec", 
+                          "horario",
+                          "puntaje")
+head(data.final)
+```
+
+\pagebreak
+
+# 2. Análisis exploratorio
+
+## Relación entre edad, satisfacción y posibilidad de recomendación
+
+Podría existir una relación entre la edad del cliente y la evaluación de satisfacción y recomendación. La siguiente tabla muestra un promedio de cada evaluación por rango de edad y la diferencia con respecto a un promedio general. Se puede observar que para la evaluación de satisfacción los puntajes promedio de los rangos de edad 1, 2 y 3 están por sobre el promedio general y para el resto de los rangos de edad los puntajes estan por debajo de lo general, lo mismo ocurre para la evaluación de recomendación.
+
+```{r}
+tabla1 <- data.final %>% 
+  dplyr::group_by() %>% 
+  dplyr::mutate(promedio.general.satisf = round(mean(as.numeric(satisf)), 3),
+                promedio.general.recomen = round(mean(as.numeric(recomen)), 3)) %>% 
+  dplyr::group_by(edad) %>% 
+  dplyr::summarise(casos = n(),
+                   promedio.satisf = round(mean(as.numeric(satisf)), 3),
+                   diff.satisf = promedio.satisf - mean(promedio.general.satisf),
+                   promedio.recomen = round(mean(as.numeric(recomen)), 3),
+                   diff.recomen = promedio.recomen - mean(promedio.general.recomen))
+knitr::kable(tabla1)
+```
+
+## Relación entre el puntaje de la encuesta y satisfacción
+
+Otro hallazgo interesante es la relación que puede existir entre el puntaje total de la encuesta, lo cual es bastante intuitivo ya que si una persona responde positivamente al resto de las preguntas lo más probable es que su puntaje de recomendación y de satisfacción sea elevado
+
+```{r}
+data.final %>% 
+  ggplot(aes(x = satisf, y = puntaje)) +
+  geom_boxplot()
+  # facet_grid(.~genero)
+```
+
+## Relación entre satisfacción y frecuencia de compra
+
+Finalmente concluimos con una interacción interesante que ocurre entre la evaluación de satisfacción y la frecuencia de compra, donde apreciamos que la frecuencia 1 concentra los mejores puntajes de satisfacción y estos van disminuyendo a medida que la frecuencia aumenta.
+
+```{r}
+tabla2 <- table(data.final$satisf, data.final$frec, dnn = c("Satisfacción",
+                                                            "Frecuencia"))
+tabla2 <- round(prop.table(tabla2, 2)*100, 1)
+tabla2
+```
+
+# 3. Modelamiento de satisfacción y recomendación
+
+## 3.1. Satisfacción - Selección de variables
+
+Dado que la evaluación de satisfacción y recomendación son de carácter categórico y ordinal, donde la categoría "Muy de acuerdo" es mayor que "De acuerdo" y así con el resto de las categorías, ajustaremos un modelo logístico para categorías ordenadas (probit). Este modelo compara razones de chance de pertenecer a una categoria con respecto a la siguiente (ordenadamente).
+
+Partimos ajustando un modelo con todas las variables para detectar cuales son o no significativas para el modelo. A partir de la siguiente tabla podemos concluir que las variables significativas son el género, la edad, frecuencia y puntaje, por lo que ajustaremos un modelo con estas variables e interpretaremos los resultados.
+
+```{r}
+formula1 <- as.formula(
+  "satisf~genero+edad+nacion+resid+sosten+ingreso+frec+horario+puntaje")
+modelo.polr <- MASS::polr(data = data.final,
+                          formula = formula1, 
+                          Hess = TRUE)
+coef.table <- coef(summary(modelo.polr))
+p <- pnorm(abs(coef.table[, "t value"]), lower.tail = FALSE) * 2
+coef.table <- cbind(coef.table, "p value" = p)
+coef.table <- as.data.frame(coef.table)
+coef.table$significant <- ifelse(coef.table$`p value` > 0.05, FALSE, TRUE)
+knitr::kable(coef.table)
+```
+
+## 3.2. Satisfacción - Ajuste e interpretación del modelo
+
+Este ajuste nos proporcionará razones de chance de pertenecer a una categoria mayor con respecto a una menor. Algunos ejemplos concretos:
+  
+  + La chance de dar una mejor evaluación en la encuesta de satisfacción aumenta en un factor de 1.29 por cada punto del total del puntaje en la encuesta.
+  + La chance de dar una peor evaluación en la encuesta de satisfacción disminuye en un factor de 0.64 cuando el genero es 2.
+  + La chance de dar una peor evaluación en la encuesta de satisfacción disminuye en un factor de 0.39 cuando el rango de edad es 4.
+
+```{r}
+formula2 <- as.formula(
+  "satisf~genero+edad+frec+puntaje")
+modelo.polr.sig <- MASS::polr(data = data.final,
+                              formula = formula2, 
+                              Hess = TRUE)
+tabla3 <- cbind(OR = exp(coef(modelo.polr.sig)))
+tabla3
+```
+
+## 3.3. Recomendación - Selección de variables
+
+Haciendo un procedimiento similar al del apartado 3.1 podemos seleccionar las variables significativas para el modelamiento de la variable recomendación. Las variables son género, edad, residencia, frecuencia y puntaje.
+
+```{r}
+formula3 <- as.formula(
+  "recomen~genero+edad+nacion+resid+sosten+ingreso+frec+horario+puntaje")
+modelo.polr.r <- MASS::polr(data = data.final,
+                            formula = formula3, 
+                            Hess = TRUE)
+coef.table.r <- coef(summary(modelo.polr.r))
+p <- pnorm(abs(coef.table.r[, "t value"]), lower.tail = FALSE) * 2
+coef.table.r <- cbind(coef.table.r, "p value" = p)
+coef.table.r <- as.data.frame(coef.table.r)
+coef.table.r$significant <- ifelse(coef.table.r$`p value` > 0.05, FALSE, TRUE)
+knitr::kable(coef.table.r)
+```
+
+## 3.4. Recomendación - Ajuste e interpretación del modelo
+
+Este ajuste nos proporcionará razones de chance de pertenecer a una categoria mayor con respecto a una menor. Algunos ejemplos concretos:
+  
+  + La chance de dar una mejor evaluación en la encuesta de satisfacción aumenta en un factor de 9.75 cuando la residencia es 16.
+  + La chance de dar una peor evaluación en la encuesta de satisfacción disminuye en un factor de 0.21 cuando la frecuencia es 4.
+
+```{r}
+formula4 <- as.formula(
+  "recomen~genero+edad+resid+frec+puntaje")
+modelo.polr.r.sig <- MASS::polr(data = data.final,
+                                formula = formula4, 
+                                Hess = TRUE)
+tabla4 <- cbind(OR = exp(coef(modelo.polr.r.sig)))
+tabla4
+```
+
+# 4. Indicaciones y recomendaciones
+
+Una vez que identificamos y entendemos cuales son los factores que afectan la probabilidad de recibir una cierta evaluación, estamos en posición de poder tomar acciones en base a estos hallazgos. 
+Tomando como referencia algunas de las interpretaciones del apartado anterior, un camino de acción puede ser enfocar los esfuerzos en personas del genero 2 o de rango de edad 4 y entender que aspectos de la encuesta tienen un menor puntaje. En la siguiente tabla se muestra un puntaje promedio de las 10 preguntas peor evaluadas para encuestados en el rango de edad 4 ordenadas de menor a mayor puntaje. Es interesante ver como las 7 primeras preguntas peor evaluadas están relacionadas con al precio, calidad y variedad de productos en la tienda, lo cual segun los encuestados en este rango de edad es bastante deficiente, por lo que se podrían tomar medidas como incluir productos nuevos que sean de interés de este grupo de personas.
+
+Este tipo de enfoque permite tomar acciones concretas sobre cómo se podría mejorar y si es que es rentable para el negocio llevar a cabo estas mejoras.
+
+```{r}
+data.final.desglose <- as.data.frame(cbind(Y1, Y2, D, Q))
+data.final.desglose <- data.final.desglose %>% 
+  dplyr::filter(D2 == 4) %>% 
+  dplyr::select(-c(Y1, Y2, D1, D2, D3, D4, D5, D6, D7, D8))
+
+puntajes.promedio.pregunta <- cbind(
+  puntaje.promedio = apply(data.final.desglose, 2, mean))
+
+puntajes.promedio.pregunta <- cbind(
+  puntaje.promedio = puntajes.promedio.pregunta[order(puntajes.promedio.pregunta),])
+head(puntajes.promedio.pregunta, 10)
+```
+
+Si ahora vemos un ejemplo similar pero para el modelo de recomendación podremos corroborar que la tendencia es la misma que para el caso de satisfacción, donde los ítems de la encuesta con menor puntaje estan relacionados al precio, calidad y variedad de productos en la tienda.
+
+```{r}
+data.final.desglose.r <- as.data.frame(cbind(Y1, Y2, D, Q))
+data.final.desglose.r <- data.final.desglose.r %>% 
+  dplyr::filter(D7 == 4) %>% 
+  dplyr::select(-c(Y1, Y2, D1, D2, D3, D4, D5, D6, D7, D8))
+
+puntajes.promedio.pregunta.r <- cbind(
+  puntaje.promedio = apply(data.final.desglose.r, 2, mean))
+
+puntajes.promedio.pregunta.r <- cbind(
+  puntaje.promedio = puntajes.promedio.pregunta.r[order(puntajes.promedio.pregunta.r),])
+head(puntajes.promedio.pregunta.r, 10)
+```
